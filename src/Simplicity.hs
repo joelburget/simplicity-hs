@@ -1,15 +1,18 @@
 {-# language DataKinds #-}
 {-# language GADTs #-}
 {-# language LambdaCase #-}
+{-# language StandaloneDeriving #-}
 {-# language TypeFamilies #-}
 module Simplicity where
 
-import Prelude (Either(..), fst, snd)
+import Prelude (Either(..), Show(..), fst, snd, flip)
+import Control.Category
 
 data Ty
   = UnitTy
   | Sum Ty Ty
   | Prod Ty Ty
+  deriving Show
 
 type family TySem (ty :: Ty)
 
@@ -23,10 +26,17 @@ data Term :: Ty -> Ty -> * where
   Unit :: Term a 'UnitTy
   Injl :: Term a b -> Term a ('Sum b c)
   Injr :: Term a c -> Term a ('Sum b c)
-  Case :: Term ('Prod a c) d -> Term ('Prod b c) d -> Term ('Prod ('Sum a b) c) d
+  Case
+    :: Term ('Prod a c) d -> Term ('Prod b c) d -> Term ('Prod ('Sum a b) c) d
   Pair :: Term a b -> Term a c -> Term a ('Prod b c)
   Take :: Term a c -> Term ('Prod a b) c
   Drop :: Term b c -> Term ('Prod a b) c
+
+deriving instance Show (Term a b)
+
+instance Category Term where
+  id = Iden
+  (.) = flip Comp
 
 eval :: Term a b -> TySem a -> TySem b
 eval = \case
