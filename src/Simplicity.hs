@@ -54,11 +54,11 @@ eval = \case
 
 -- examples
 
-twoTy :: Ty
-twoTy = Sum UnitTy UnitTy
+type Bit = 'Sum 'UnitTy 'UnitTy
 
-not :: Term ('Sum 'UnitTy 'UnitTy) ('Sum 'UnitTy 'UnitTy)
+not :: Term Bit Bit
 not = Comp (Pair Iden Unit) (Case (Injr Unit) (Injl Unit))
 
+halfAdder :: Term ('Prod Bit Bit) ('Prod Bit Bit)
 halfAdder = Case (Drop (Pair (Injl Unit) Iden))
                  (Drop (Pair Iden not))
