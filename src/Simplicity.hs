@@ -54,11 +54,54 @@ eval = \case
 
 -- examples
 
-type Bit = 'Sum 'UnitTy 'UnitTy
+type BitTy = 'Sum 'UnitTy 'UnitTy
 
-not :: Term Bit Bit
+not :: Term BitTy BitTy
 not = Comp (Pair Iden Unit) (Case (Injr Unit) (Injl Unit))
 
-halfAdder :: Term ('Prod Bit Bit) ('Prod Bit Bit)
+false :: TySem BitTy
+false = Left ()
+
+true :: TySem BitTy
+true = Right ()
+
+-- Though the input and output types look the same, this is better thought of
+-- as `Bit x Bit -> Bit^2`. In other words, we take two bits and add them to
+-- get a half-nibble.
+halfAdder :: Term ('Prod BitTy BitTy) ('Prod BitTy BitTy)
 halfAdder = Case (Drop (Pair (Injl Unit) Iden))
                  (Drop (Pair Iden not))
+
+type Adder nbits = Term ('Prod ('Prod nbits nbits) BitTy) ('Prod BitTy nbits)
+
+fullAdder :: Adder BitTy
+fullAdder = Comp
+  (Pair (Take halfAdder) (Drop Iden))
+  (Comp
+    (Pair
+      (Take (Take Iden))
+      (Comp
+        (Pair (Take (Drop Iden)) (Drop Iden))
+        halfAdder))
+    (Pair
+      (Case (Injr Unit) (Drop (Take Iden)))
+      (Drop (Drop Iden))))
+
+fullAddEx :: TySem ('Prod BitTy BitTy)
+fullAddEx = eval fullAdder ((false, false), false)
+
+doubleAdder :: Adder nbits -> Adder ('Prod nbits nbits)
+doubleAdder nbitadder = Comp
+  (Pair
+    (Take (Pair (Take (Take Iden))
+                      (Drop (Take Iden))))
+    (Comp (Pair (Take (Pair (Take (Drop Iden))
+                            (Drop (Drop Iden))))
+                (Drop Iden))
+          nbitadder))
+  (Comp (Pair (Drop (Drop Iden))
+              (Comp (Pair (Take Iden)
+                          (Drop (Take Iden)))
+                    nbitadder))
+        (Pair (Drop (Take Iden))
+              (Pair (Drop (Drop Iden)) (Take Iden))))
