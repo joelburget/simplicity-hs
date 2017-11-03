@@ -3,10 +3,17 @@
 {-# language LambdaCase #-}
 {-# language StandaloneDeriving #-}
 {-# language TypeFamilies #-}
+{-# language TypeOperators #-}
+{-# OPTIONS_GHC -Wall #-}
+
 module Simplicity where
 
-import Prelude (Either(..), Show(..), fst, snd, flip)
-import Control.Category
+-- import Prelude (Either(..), Show(..), String, Int, IO, fst, snd, flip, (==), putStrLn, (*))
+import Prelude hiding (not)
+-- import CCCs hiding (eval, fst, snd, ($))
+-- import Control.Category
+import ConCat.Category
+
 
 data Ty
   = UnitTy
@@ -20,25 +27,45 @@ type instance TySem 'UnitTy = ()
 type instance TySem ('Sum a b) = Either (TySem a) (TySem b)
 type instance TySem ('Prod a b) = (TySem a, TySem b)
 
-data Term :: Ty -> Ty -> * where
-  Iden :: Term a a
-  Comp :: Term a b -> Term b c -> Term a c
-  Unit :: Term a 'UnitTy
-  Injl :: Term a b -> Term a ('Sum b c)
-  Injr :: Term a c -> Term a ('Sum b c)
-  Case
-    :: Term ('Prod a c) d -> Term ('Prod b c) d -> Term ('Prod ('Sum a b) c) d
-  Pair :: Term a b -> Term a c -> Term a ('Prod b c)
-  Take :: Term a c -> Term ('Prod a b) c
-  Drop :: Term b c -> Term ('Prod a b) c
+data Term :: * -> * -> * where
+  Iden ::                                   Term a a
+  Comp :: Term a b      -> Term b c      -> Term a c
+  Unit ::                                   Term a ()
+  Injl ::                  Term a b      -> Term a (Either b c)
+  Injr ::                  Term a c      -> Term a (Either b c)
+  Case :: Term (a, c) d -> Term (b, c) d -> Term (Either a b, c) d
+  Pair :: Term a b      -> Term a c      -> Term a (b, c)
+  Take ::                  Term a c      -> Term (a, b) c
+  Drop ::                  Term b c      -> Term (a, b) c
 
 deriving instance Show (Term a b)
 
 instance Category Term where
-  id = Iden
+  id  = Iden
   (.) = flip Comp
 
-eval :: Term a b -> TySem a -> TySem b
+instance ProductCat Term where
+  exl     = Take Iden
+  exr     = Drop Iden
+  (&&&)   = Pair
+  f *** g = Pair (Take f) (Drop g)
+
+instance TerminalCat Term where
+  it = Unit
+
+instance CoproductCat Term where
+  inl = Injl Iden
+  inr = Injr Iden
+
+  -- (|||) :: (c `k` a) -> (d `k` a) -> (Coprod k c d `k` a)
+  --       :: Term c a -> Term d a -> Term (Either c d) a
+  f ||| g = undefined -- this may be trouble
+
+instance DistribCat Term where
+  distl = Comp swapP (Case (Injl swapP) (Injr swapP))
+  distr = Case (Injl Iden) (Injr Iden)
+
+eval :: Term a b -> a -> b
 eval = \case
   Iden     -> \a -> a
   Comp s t -> \a -> eval t (eval s a)
@@ -56,7 +83,7 @@ eval = \case
 
 type BitTy = 'Sum 'UnitTy 'UnitTy
 
-not :: Term BitTy BitTy
+not :: Term (TySem BitTy) (TySem BitTy)
 not = Comp (Pair Iden Unit) (Case (Injr Unit) (Injl Unit))
 
 false :: TySem BitTy
@@ -68,11 +95,13 @@ true = Right ()
 -- Though the input and output types look the same, this is better thought of
 -- as `Bit x Bit -> Bit^2`. In other words, we take two bits and add them to
 -- get a half-nibble.
-halfAdder :: Term ('Prod BitTy BitTy) ('Prod BitTy BitTy)
+halfAdder :: Term (TySem ('Prod BitTy BitTy)) (TySem ('Prod BitTy BitTy))
 halfAdder = Case (Drop (Pair (Injl Unit) Iden))
                  (Drop (Pair Iden not))
 
-type Adder nbits = Term ('Prod ('Prod nbits nbits) BitTy) ('Prod BitTy nbits)
+type Adder nbits = Term
+  (TySem ('Prod ('Prod nbits nbits) BitTy))
+  (TySem ('Prod BitTy nbits))
 
 fullAdder :: Adder BitTy
 fullAdder = Comp
@@ -90,7 +119,7 @@ fullAdder = Comp
 fullAddEx :: TySem ('Prod BitTy BitTy)
 fullAddEx = eval fullAdder ((false, false), false)
 
-doubleAdder :: Adder nbits -> Adder ('Prod nbits nbits)
+-- doubleAdder :: forall nbits. Adder nbits -> Adder ('Prod nbits nbits)
 doubleAdder nbitadder = Comp
   (Pair
     (Take (Pair (Take (Take Iden))
