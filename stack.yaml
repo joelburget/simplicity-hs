@@ -1,0 +1,9 @@
+flags: {}
+packages:
+- '.'
+- './concat/classes'
+- './concat/plugin'
+- './concat/examples'
+extra-deps: []
+resolver: lts-9.3
+
