@@ -6,12 +6,15 @@ module BitMachine where
 
 import Prelude hiding (read, seq, succ)
 import Control.Lens
+import Control.Monad.Except
 import Control.Monad.State.Strict
+import Data.Monoid (First)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Simplicity
 
 newtype Bit = Bit Bool
+  deriving (Eq, Show)
 
 tt, ff :: Bit
 tt = Bit True
@@ -195,40 +198,70 @@ padl a b = max (bitSize a) (bitSize b) - bitSize a
 padr :: Ty -> Ty -> Int
 padr a b = max (bitSize a) (bitSize b) - bitSize b
 
-type Operational = State BitMachine
+data Failure
+  = BadWriteCursorPosition
+  | BadReadCursorPosition
+  | WriteExpectsUndefined
+  | MustHaveActiveWriteFrame
+  | MustHaveActiveReadFrame
+  | InvariantViolation
+  | NoRead
+
+type Operational = StateT BitMachine (Either Failure)
+
+failWith :: Failure -> Maybe a -> Operational a
+failWith failure = \case
+  Nothing -> lift (Left failure)
+  Just a  -> pure a
+
+assert :: Failure -> Bool -> Operational ()
+assert failure = \case
+  False -> lift (Left failure)
+  True  -> pure ()
+
+invariantSafe :: Getting (First a) BitMachine a -> Operational a
+invariantSafe getter = preuse getter >>= failWith InvariantViolation
 
 nop :: Operational ()
 nop = pure ()
 
-getReadPos_ :: Operational Int
-getReadPos_ = undefined
-
-getWritePos_ :: Operational Int
-getWritePos_ = undefined
-
 write :: Bit -> Operational ()
 write b = do
-  pos <- getWritePos_
+  (frame, pos) <- invariantSafe (writeFrameStack . _head)
+  assert BadWriteCursorPosition   $ pos < length frame
+  assert WriteExpectsUndefined $ frame ^?! ix pos == Nothing
   writeFrameStack . _head . _1 . ix pos ?= b
 
 copy :: Int -> Operational ()
 copy n = do
-  readPos <- getReadPos_
-  -- TODO check bounds
-  Just slice <- preuse (readFrameStack . _head . _1 . to (V.slice readPos n))
+  (readFrame, readPos)   <- invariantSafe (readFrameStack . _head)
+  (writeFrame, writePos) <- invariantSafe (writeFrameStack . _head)
 
-  writePos <- getWritePos_
+  assert BadReadCursorPosition  $ readPos  + n <= length readFrame
+  assert BadWriteCursorPosition $ writePos + n <= length writeFrame
+
+  slice <- invariantSafe (readFrameStack . _head . _1 . to (V.slice readPos n))
+
   let updateVector = V.zip (V.generate n (writePos +)) slice
   writeFrameStack . _head . _1 %= flip V.update updateVector
 
 skip :: Int -> Operational ()
-skip n = writeFrameStack . _head . _2 += n
+skip n = do
+  (frame, pos) <- invariantSafe (writeFrameStack . _head)
+  assert BadWriteCursorPosition $ pos + n <= length frame
+  writeFrameStack . _head . _2 += n
 
 fwd :: Int -> Operational ()
-fwd n = readFrameStack . _head . _2 += n
+fwd n = do
+  (frame, pos) <- invariantSafe (readFrameStack . _head)
+  assert BadReadCursorPosition $ pos + n <= length frame
+  readFrameStack . _head . _2 += n
 
 bwd :: Int -> Operational ()
-bwd n = readFrameStack . _head . _2 -= n
+bwd n = do
+  (frame, pos) <- invariantSafe (readFrameStack . _head)
+  assert BadReadCursorPosition $ pos + n <= length frame
+  readFrameStack . _head . _2 -= n
 
 newFrame :: Int -> Operational ()
 newFrame n = writeFrameStack %= cons (V.replicate n Nothing, 0)
@@ -237,11 +270,15 @@ moveFrame :: Operational ()
 moveFrame = do
   stk <- use writeFrameStack
   let Just (frame, stk') = uncons stk
+  assert MustHaveActiveWriteFrame $ Prelude.not (null stk')
   writeFrameStack .= stk'
-  readFrameStack %= cons frame
+  readFrameStack %= cons (frame & _2 .~ 0)
 
 dropFrame :: Operational ()
-dropFrame = writeFrameStack %= tail
+dropFrame = do
+  stk <- use readFrameStack
+  assert MustHaveActiveReadFrame $ Prelude.not (null stk)
+  readFrameStack %= tail
 
 read :: Operational Bit
 read = do
@@ -249,8 +286,8 @@ read = do
   case stk of
     (arr, i):_ -> case arr ^? ix i of
       Just (Just b) -> pure b
-      _ -> error "no read"
-    _ -> error "no read"
+      _ -> throwError NoRead
+    _ -> throwError NoRead
 
 operational :: ElabTerm Ty -> Operational ()
 operational (EIden (Seq a _a)) = copy (bitSize a)
