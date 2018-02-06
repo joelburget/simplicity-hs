@@ -113,7 +113,7 @@ fullAdder = Comp
         (Pair (Take (Drop Iden)) (Drop Iden))
         halfAdder))
     (Pair
-      (Case (Injr Unit) (Drop (Take Iden)))
+      (Case (Drop (Take Iden)) (Injr Unit))
       (Drop (Drop Iden))))
 
 fullAddEx :: TySem ('Prod BitTy BitTy)
