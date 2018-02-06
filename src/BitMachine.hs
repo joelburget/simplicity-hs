@@ -290,42 +290,43 @@ read = do
     _ -> throwError NoRead
 
 operational :: ElabTerm Ty -> Operational ()
-operational (EIden (Seq a _a)) = copy (bitSize a)
-operational (EComp s t _) = do
-  newFrame (bitSize (getSucc s))
-  operational s
-  moveFrame
-  operational t
-  dropFrame
-operational (EUnit _seq) = nop
-operational (EInjl t (Seq _ (Sum b c))) = do
-  write ff
-  skip $ padl b c
-  operational t
-operational (EInjr t (Seq _a (Sum b c))) = do
-  write tt
-  skip $ padr b c
-  operational t
-operational (ECase s t (Seq (Prod (Sum a b) _) _)) = do
-  bit <- read
-  case bit of
-    Bit False -> do
-      fwd (1 + padl a b)
-      operational s
-      bwd (1 + padl a b)
-    Bit True -> do
-      fwd (1 + padr a b)
-      operational t
-      bwd (1 + padr a b)
-operational (EPair s t _) = do
-  operational s
-  operational t
-operational (ETake t _) = operational t
-operational (EDrop t (Seq (Prod a _) _)) = do
-  fwd (bitSize a)
-  operational t
-  bwd (bitSize a)
-operational _ = error "no match"
+operational = \case
+  (EIden (Seq a _a)) -> copy (bitSize a)
+  (EComp s t _) -> do
+    newFrame (bitSize (getSucc s))
+    operational s
+    moveFrame
+    operational t
+    dropFrame
+  (EUnit _seq) -> nop
+  (EInjl t (Seq _ (Sum b c))) -> do
+    write ff
+    skip $ padl b c
+    operational t
+  (EInjr t (Seq _a (Sum b c))) -> do
+    write tt
+    skip $ padr b c
+    operational t
+  (ECase s t (Seq (Prod (Sum a b) _) _)) -> do
+    bit <- read
+    case bit of
+      Bit False -> do
+        fwd (1 + padl a b)
+        operational s
+        bwd (1 + padl a b)
+      Bit True -> do
+        fwd (1 + padr a b)
+        operational t
+        bwd (1 + padr a b)
+  (EPair s t _) -> do
+    operational s
+    operational t
+  (ETake t _) -> operational t
+  (EDrop t (Seq (Prod a _) _)) -> do
+    fwd (bitSize a)
+    operational t
+    bwd (bitSize a)
+  _ -> error "no match"
 
 -- Cell usage static analysis
 cellBnd :: Term a b -> Ty -> Ty -> Int
