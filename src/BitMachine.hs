@@ -55,15 +55,15 @@ unPartialSeq (Seq t1 t2) = Seq <$> unPartial t1 <*> unPartial t2
 
 unPartialTm :: ElabTerm PartialTy -> Maybe (ElabTerm Ty)
 unPartialTm = \case
-  EIden s -> EIden <$> unPartialSeq s
+  EIden s       -> EIden <$> unPartialSeq s
   EComp t1 t2 s -> EComp <$> unPartialTm t1 <*> unPartialTm t2 <*> unPartialSeq s
-  EUnit s -> EUnit <$> unPartialSeq s
-  EInjl t s -> EInjl <$> unPartialTm t <*> unPartialSeq s
-  EInjr t s -> EInjr <$> unPartialTm t <*> unPartialSeq s
+  EUnit s       -> EUnit <$> unPartialSeq s
+  EInjl t s     -> EInjl <$> unPartialTm t  <*> unPartialSeq s
+  EInjr t s     -> EInjr <$> unPartialTm t  <*> unPartialSeq s
   ECase t1 t2 s -> ECase <$> unPartialTm t1 <*> unPartialTm t2 <*> unPartialSeq s
   EPair t1 t2 s -> EPair <$> unPartialTm t1 <*> unPartialTm t2 <*> unPartialSeq s
-  ETake t s -> ETake <$> unPartialTm t <*> unPartialSeq s
-  EDrop t s -> EDrop <$> unPartialTm t <*> unPartialSeq s
+  ETake t s     -> ETake <$> unPartialTm t  <*> unPartialSeq s
+  EDrop t s     -> EDrop <$> unPartialTm t  <*> unPartialSeq s
 
 unify :: PartialTy -> PartialTy -> Maybe PartialTy
 unify UnitP UnitP = Just UnitP
