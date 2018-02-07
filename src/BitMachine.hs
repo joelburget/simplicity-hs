@@ -45,7 +45,8 @@ deriving instance Show ty => Show (ElabTerm ty)
 
 unPartial :: PartialTy -> Maybe Ty
 unPartial UnitP = Just UnitTy
-unPartial Unknown = Nothing -- XXX "replacing any remaining type variables with the unit type"
+-- replace any remaining type variables with the unit type
+unPartial Unknown = Just UnitTy
 unPartial (SumP a b) = Sum <$> unPartial a <*> unPartial b
 unPartial (ProdP a b) = Prod <$> unPartial a <*> unPartial b
 
