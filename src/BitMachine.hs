@@ -32,18 +32,31 @@ data ErasedTerm
   | ErPair ErasedTerm ErasedTerm
   | ErTake ErasedTerm
   | ErDrop ErasedTerm
+  deriving Show
 
 erase :: Term a b -> ErasedTerm
 erase = \case
-  Iden -> ErIden
+  Iden     -> ErIden
   Comp s t -> ErComp (erase s) (erase t)
-  Unit -> ErUnit
-  Injl t -> ErInjl (erase t)
-  Injr t -> ErInjr (erase t)
+  Unit     -> ErUnit
+  Injl t   -> ErInjl (erase t)
+  Injr t   -> ErInjr (erase t)
   Case s t -> ErCase (erase s) (erase t)
   Pair s t -> ErPair (erase s) (erase t)
-  Take t -> ErTake (erase t)
-  Drop t -> ErDrop (erase t)
+  Take t   -> ErTake (erase t)
+  Drop t   -> ErDrop (erase t)
+
+erase' :: ElabTerm Ty -> ErasedTerm
+erase' = \case
+  EIden _     -> ErIden
+  EComp s t _ -> ErComp (erase' s) (erase' t)
+  EUnit _     -> ErUnit
+  EInjl t _   -> ErInjl (erase' t)
+  EInjr t _   -> ErInjr (erase' t)
+  ECase s t _ -> ErCase (erase' s) (erase' t)
+  EPair s t _ -> ErPair (erase' s) (erase' t)
+  ETake t _   -> ErTake (erase' t)
+  EDrop t _   -> ErDrop (erase' t)
 
 data PartialTy
   = UnitP
@@ -67,6 +80,18 @@ data ElabTerm ty where
   EDrop ::                ElabTerm ty -> Seq ty -> ElabTerm ty
 
 deriving instance Show ty => Show (ElabTerm ty)
+
+justTy :: ElabTerm ty -> (Seq ty)
+justTy = \case
+  EIden ty     -> ty
+  EComp _ _ ty -> ty
+  EUnit ty     -> ty
+  EInjl _ ty   -> ty
+  EInjr _ ty   -> ty
+  ECase _ _ ty -> ty
+  EPair _ _ ty -> ty
+  ETake _ ty   -> ty
+  EDrop _ ty   -> ty
 
 unPartial :: PartialTy -> Maybe Ty
 unPartial UnitP = Just UnitTy
@@ -131,7 +156,7 @@ expand = \case
   Unit     -> EUnit su
   Injl   t -> EInjl (expand t) su
   Injr   t -> EInjr (expand t) su
-  Case s t -> EComp (expand s) (expand t) su
+  Case s t -> ECase (expand s) (expand t) su
   Pair s t -> EPair (expand s) (expand t) su
   Take   t -> ETake (expand t) su
   Drop   t -> EDrop (expand t) su
@@ -341,13 +366,16 @@ runOperational :: Operational a -> BitMachine -> Either Failure (a, BitMachine)
 runOperational = runStateT
 
 -- TODO: rewrite as fold
-run :: BitMachine -> [Instruction] -> [(Maybe Instruction, Either Failure BitMachine)]
-run init insts = go Nothing init insts where
-  go prevInst machine [] = [(prevInst, Right machine)]
-  go prevInst machine (inst:insts) = case runOperational (execI inst) machine of
-    Left failure -> [(prevInst, Left failure)]
+run
+  :: BitMachine
+  -> [(Instruction, Path)]
+  -> [(Maybe Instruction, Path, Either Failure BitMachine)]
+run init insts = go (Nothing, []) init insts where
+  go (prevInst, prevPath) machine [] = [(prevInst, prevPath, Right machine)]
+  go (prevInst, prevPath) machine ((inst, path):insts) = case runOperational (execI inst) machine of
+    Left failure -> [(prevInst, prevPath, Left failure)]
     -- XXX hacky
-    Right (jump, machine') -> (prevInst, Right machine):go (Just inst) machine' (drop (jump - 1) insts)
+    Right (jump, machine') -> (prevInst, prevPath, Right machine):go (Just inst, path) machine' (drop (jump - 1) insts)
 
 data Instruction
   = Nop
@@ -363,41 +391,48 @@ data Instruction
   | Jmp Int
   deriving Show
 
-compile :: ElabTerm Ty -> [Instruction]
-compile = \case
-  EIden (Seq a _a) -> [Copy (bitSize a)]
+data Step
+  = Child1
+  | Child2
+  deriving Show
+
+type Path = [Step]
+
+compile :: Path -> ElabTerm Ty -> [(Instruction, Path)]
+compile path = \case
+  EIden (Seq a _a) -> [(Copy (bitSize a), path)]
   (EComp s t _)
-    -> [ NewFrame (bitSize (getSucc s)) ]
-    <> compile s
-    <> [ MoveFrame ]
-    <> compile t
-    <> [ DropFrame ]
-  (EUnit _seq) -> [Nop]
+    -> [ (NewFrame (bitSize (getSucc s)), path) ]
+    <> compile (Child1:path) s
+    <> [ (MoveFrame, path) ]
+    <> compile (Child2:path) t
+    <> [ (DropFrame, path) ]
+  (EUnit _seq) -> [(Nop, path)]
   (EInjl t (Seq _ (Sum b c)))
-    -> [ Write ff ]
-    <> [ Skip (padl b c) ]
-    <> compile t
+    -> [ (Write ff, path) ]
+    <> [ (Skip (padl b c), path) ]
+    <> compile (Child1:path) t
   (EInjr t (Seq _a (Sum b c)))
-    -> [ Write tt ]
-    <> [ Skip (padr b c) ]
-    <> compile t
+    -> [ (Write tt, path) ]
+    <> [ (Skip (padr b c), path) ]
+    <> compile (Child1:path) t
   (ECase s t (Seq (Prod (Sum a b) _) _)) ->
     let branch1 =
-             [ Fwd (1 + padl a b) ]
-          <> compile s
-          <> [ Bwd (1 + padl a b) ]
-          <> [ Jmp (length branch2) ]
+             [ (Fwd (1 + padl a b), path) ]
+          <> compile (Child1:path) s
+          <> [ (Bwd (1 + padl a b), path) ]
+          <> [ (Jmp (length branch2 + 1), path) ]
         branch2 =
-             [ Fwd (1 + padr a b) ]
-          <> compile t
-          <> [ Bwd (1 + padr a b) ]
-    in ReadJmp (length branch1) : branch1 <> branch2
-  (EPair s t _) -> compile s <> compile t
-  (ETake t _) -> compile t
+             [ (Fwd (1 + padr a b), path) ]
+          <> compile (Child2:path) t
+          <> [ (Bwd (1 + padr a b), path) ]
+    in (ReadJmp (length branch1 + 1), path) : branch1 <> branch2
+  (EPair s t _) -> compile (Child1:path) s <> compile (Child2:path) t
+  (ETake t _) -> compile (Child1:path) t
   (EDrop t (Seq (Prod a _) _))
-    -> [ Fwd (bitSize a) ]
-    <> compile t
-    <> [ Bwd (bitSize a) ]
+    -> [ (Fwd (bitSize a), path) ]
+    <> compile (Child1:path) t
+    <> [ (Bwd (bitSize a), path) ]
   _ -> error "no match"
 
 operational :: ElabTerm Ty -> Operational ()
