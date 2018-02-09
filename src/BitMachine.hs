@@ -9,6 +9,7 @@ import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State.Strict
 import Data.Monoid (First)
+import Data.Semigroup ((<>))
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Simplicity
@@ -19,6 +20,30 @@ newtype Bit = Bit Bool
 tt, ff :: Bit
 tt = Bit True
 ff = Bit False
+
+-- TODO: maybe do this in a parametric / traversable way
+data ErasedTerm
+  = ErIden
+  | ErComp ErasedTerm ErasedTerm
+  | ErUnit
+  | ErInjl ErasedTerm
+  | ErInjr ErasedTerm
+  | ErCase ErasedTerm ErasedTerm
+  | ErPair ErasedTerm ErasedTerm
+  | ErTake ErasedTerm
+  | ErDrop ErasedTerm
+
+erase :: Term a b -> ErasedTerm
+erase = \case
+  Iden -> ErIden
+  Comp s t -> ErComp (erase s) (erase t)
+  Unit -> ErUnit
+  Injl t -> ErInjl (erase t)
+  Injr t -> ErInjr (erase t)
+  Case s t -> ErCase (erase s) (erase t)
+  Pair s t -> ErPair (erase s) (erase t)
+  Take t -> ErTake (erase t)
+  Drop t -> ErDrop (erase t)
 
 data PartialTy
   = UnitP
@@ -207,6 +232,7 @@ data Failure
   | MustHaveActiveReadFrame
   | InvariantViolation
   | NoRead
+  deriving Show
 
 type Operational = StateT BitMachine (Either Failure)
 
@@ -229,7 +255,7 @@ nop = pure ()
 write :: Bit -> Operational ()
 write b = do
   (frame, pos) <- invariantSafe (writeFrameStack . _head)
-  assert BadWriteCursorPosition   $ pos < length frame
+  assert BadWriteCursorPosition $ pos < length frame
   assert WriteExpectsUndefined $ frame ^?! ix pos == Nothing
   writeFrameStack . _head . _1 . ix pos ?= b
 
@@ -289,6 +315,90 @@ read = do
       Just (Just b) -> pure b
       _ -> throwError NoRead
     _ -> throwError NoRead
+
+execI :: Instruction -> Operational Int
+execI = \case
+  Nop        -> nop        >> next
+  Write bit  -> write bit  >> next
+  Copy n     -> copy n     >> next
+  Skip n     -> skip n     >> next
+  Fwd n      -> fwd n      >> next
+  Bwd n      -> bwd n      >> next
+  NewFrame n -> newFrame n >> next
+  MoveFrame  -> moveFrame  >> next
+  DropFrame  -> dropFrame  >> next
+  ReadJmp n  -> do
+    stk <- use readFrameStack
+    case stk of
+      (arr, i):_ -> case arr ^? ix i of
+        Just (Just (Bit b)) -> pure $ if b then n else 1
+        _ -> throwError NoRead
+      _ -> throwError NoRead
+  Jmp n -> pure n
+  where next = pure 1
+
+runOperational :: Operational a -> BitMachine -> Either Failure (a, BitMachine)
+runOperational = runStateT
+
+-- TODO: rewrite as fold
+run :: BitMachine -> [Instruction] -> [(Maybe Instruction, Either Failure BitMachine)]
+run init insts = go Nothing init insts where
+  go prevInst machine [] = [(prevInst, Right machine)]
+  go prevInst machine (inst:insts) = case runOperational (execI inst) machine of
+    Left failure -> [(prevInst, Left failure)]
+    -- XXX hacky
+    Right (jump, machine') -> (prevInst, Right machine):go (Just inst) machine' (drop (jump - 1) insts)
+
+data Instruction
+  = Nop
+  | Write Bit
+  | Copy Int
+  | Skip Int
+  | Fwd Int
+  | Bwd Int
+  | NewFrame Int
+  | MoveFrame
+  | DropFrame
+  | ReadJmp Int
+  | Jmp Int
+  deriving Show
+
+compile :: ElabTerm Ty -> [Instruction]
+compile = \case
+  EIden (Seq a _a) -> [Copy (bitSize a)]
+  (EComp s t _)
+    -> [ NewFrame (bitSize (getSucc s)) ]
+    <> compile s
+    <> [ MoveFrame ]
+    <> compile t
+    <> [ DropFrame ]
+  (EUnit _seq) -> [Nop]
+  (EInjl t (Seq _ (Sum b c)))
+    -> [ Write ff ]
+    <> [ Skip (padl b c) ]
+    <> compile t
+  (EInjr t (Seq _a (Sum b c)))
+    -> [ Write tt ]
+    <> [ Skip (padr b c) ]
+    <> compile t
+  (ECase s t (Seq (Prod (Sum a b) _) _)) ->
+    let branch1 =
+             [ Fwd (1 + padl a b) ]
+          <> compile s
+          <> [ Bwd (1 + padl a b) ]
+          <> [ Jmp (length branch2) ]
+        branch2 =
+             [ Fwd (1 + padr a b) ]
+          <> compile t
+          <> [ Bwd (1 + padr a b) ]
+    in ReadJmp (length branch1) : branch1 <> branch2
+  (EPair s t _) -> compile s <> compile t
+  (ETake t _) -> compile t
+  (EDrop t (Seq (Prod a _) _))
+    -> [ Fwd (bitSize a) ]
+    <> compile t
+    <> [ Bwd (bitSize a) ]
+  _ -> error "no match"
 
 operational :: ElabTerm Ty -> Operational ()
 operational = \case

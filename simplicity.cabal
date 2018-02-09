@@ -16,6 +16,7 @@ library
   exposed-modules:
     BitMachine
     Simplicity
+    MachineView
     -- CCCs
   -- other-modules:
   -- other-extensions:
@@ -27,6 +28,8 @@ library
     , lens
     , mtl
     , vector
+    , brick
+    , vty
   hs-source-dirs:      src
   default-language:    Haskell2010
   -- ghc-options:
